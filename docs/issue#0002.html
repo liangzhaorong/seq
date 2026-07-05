@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Implementation Notes — Issue #0002</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #FAF9F6; color: #1a1a1a; padding: 2.5rem 2rem; line-height: 1.7; }
+    .container { max-width: 800px; margin: 0 auto; }
+    h1 { font-size: 1.375rem; font-weight: 700; margin-bottom: 0.25rem; }
+    .meta { color: #8B8680; font-size: 0.8125rem; margin-bottom: 2rem; }
+    h2 { font-size: 1rem; font-weight: 600; margin-top: 2rem; margin-bottom: 0.75rem; padding-bottom: 0.375rem; border-bottom: 1px solid #E8E4DE; display: flex; align-items: center; gap: 0.5rem; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    .dot.design { background: #5B8A72; } .dot.deviation { background: #D97757; } .dot.tradeoff { background: #4A6FA5; } .dot.question { background: #D4A843; }
+    .item { background: #FFFFFF; border: 1px solid #E8E4DE; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.03); }
+    .item h3 { font-size: 0.875rem; font-weight: 600; margin-bottom: 0.375rem; }
+    .item p { font-size: 0.8125rem; color: #4A4540; margin-bottom: 0.375rem; }
+    .label { display: inline-block; font-size: 0.6875rem; font-weight: 500; padding: 0.125rem 0.5rem; border-radius: 4px; margin-right: 0.375rem; }
+    .label-design { background: #F5F8F6; color: #5B8A72; border: 1px solid #5B8A72; } .label-deviation { background: #FFF5F0; color: #D97757; border: 1px solid #D97757; } .label-tradeoff { background: #F0F4F8; color: #4A6FA5; border: 1px solid #4A6FA5; } .label-question { background: #FDF8F0; color: #D4A843; border: 1px solid #D4A843; }
+    .none { color: #B0AAA4; font-style: italic; font-size: 0.8125rem; }
+    .footer { text-align: center; margin-top: 2.5rem; color: #B0AAA4; font-size: 0.6875rem; }
+    code { background: #F0EEE9; padding: 0.05rem 0.3rem; border-radius: 3px; font-size: 0.8rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Implementation Notes</h1>
+    <p class="meta">Issue <a href="https://github.com/liangzhaorong/seq/issues/2">#2</a> &mdash; 映射与扁平化（中间操作） &mdash; 2026-07-05</p>
+
+    <h2><span class="dot design"></span> Design Decisions</h2>
+
+    <div class="item">
+      <h3><span class="label label-design">Decision</span> 所有操作符加 nil 接收者守卫（库级模式确立）</h3>
+      <p><strong>Ambiguity:</strong> SPEC §5.5 规定 nil 接收者等价空流、不 panic；但实测 Go 1.27rc1 下 <code>for v := range nilSeq</code> 会 panic（<code>invalid memory address</code>），因为 range-over-func 会调用该 nil func。</p>
+      <p><strong>Choice:</strong> 每个操作符闭包顶部加 <code>if s == nil { return }</code>。</p>
+      <p><strong>Rationale:</strong> 这是 SPEC 明确的契约，且用户代码（<code>var s Seq[int]</code>、f 返回 nil、含 nil 的 Seq[Seq[U]]）可达。1 行/操作符的样板换正确性，值得。</p>
+    </div>
+
+    <div class="item">
+      <h3><span class="label label-design">Decision</span> FlatMap/Flatten 把 nil 子流视为空</h3>
+      <p><strong>Ambiguity:</strong> f 返回 nil Seq[U]、或 Flatten 的子流为 nil 时应如何处理（会 panic）。</p>
+      <p><strong>Choice:</strong> FlatMap <code>sub := f(v); if sub == nil { continue }</code>；Flatten <code>if sub == nil { continue }</code>。</p>
+      <p><strong>Rationale:</strong> nil Seq 与 Empty 语义一致（皆不产出），视为空对用户友好；Flatten 的 godoc 也承诺「nil 子流不出元素」，必须为真。</p>
+    </div>
+
+    <div class="item">
+      <h3><span class="label label-design">Decision</span> Tap 在 yield 之前调用 f</h3>
+      <p><strong>Ambiguity:</strong> Tap 的 f 在 yield 前还是后调用。</p>
+      <p><strong>Choice:</strong> <code>f(v)</code> 然后 <code>yield(v)</code>。</p>
+      <p><strong>Rationale:</strong> 元素流经即观察，符合 RxJS tap / Rust inspect 惯例；下游拒绝（yield false）时停止，未到达的元素不调用 f。</p>
+    </div>
+
+    <h2><span class="dot deviation"></span> Deviations</h2>
+    <div class="item">
+      <h3><span class="label label-deviation">Deviation</span> 无重大偏差</h3>
+      <p><strong>Spec:</strong> SPEC §4.2 + §5.1。</p>
+      <p><strong>Implemented:</strong> 完全按 SPEC 实现 Map/FilterMap/FlatMap/Tap + 顶层 Flatten，惰性与提前终止模板（§5.1）逐条遵守。</p>
+      <p><strong>Why:</strong> 本 issue 的核心是验证 Go 1.27 范型方法（<code>Map[U any]</code> 等）可编译运行——已通过 build + lint + test 验证。范型方法是本库区别于 lo 的核心创新点，确认成立。</p>
+    </div>
+
+    <h2><span class="dot tradeoff"></span> Tradeoffs</h2>
+
+    <div class="item">
+      <h3><span class="label label-tradeoff">Tradeoff</span> nil 守卫的样板 vs 文档化「禁用 nil 接收者」</h3>
+      <p><strong>Alternatives:</strong> (a) 每操作符 <code>if s == nil { return }</code>；(b) 不守卫，文档说明 nil 接收者未定义行为。</p>
+      <p><strong>Pros/Cons:</strong> (a) 满足 §5.5、防御现实 nil，代价是 ~30 操作符各 1 行；(b) 更简洁但违背 SPEC、留 panic 隐患。</p>
+      <p><strong>Why chosen:</strong> SPEC 明确要求 nil 安全，选 (a)。若样板失控可在 #16 前提炼私有 helper。</p>
+    </div>
+
+    <div class="item">
+      <h3><span class="label label-tradeoff">Tradeoff</span> Flatten 与 FlatMap 共享嵌套循环但不合并</h3>
+      <p><strong>Alternatives:</strong> Flatten 委托 FlatMap(identity)。</p>
+      <p><strong>Why chosen:</strong> 二者形态不同——Flatten 是 <code>Seq[Seq[U]]</code> 的顶层函数，FlatMap 是 <code>Seq[T]</code> 上投影返回 <code>Seq[U]</code> 的方法（SPEC §4.2 vs §4.4 都列出）。合并会模糊契约边界，保持独立。</p>
+    </div>
+
+    <h2><span class="dot question"></span> Open Questions</h2>
+
+    <div class="item">
+      <h3><span class="label label-question">Question</span> nil 守卫样板是否需提炼为 helper？</h3>
+      <p><strong>Assumption:</strong> #3~#7 的所有操作符（Filter/Slice/Find/Aggregate/Collect 等）都需 <code>if s == nil { return }</code>。</p>
+      <p><strong>Verify:</strong> 当操作符总数增长到 ~30 时，评估是否引入私有 helper（如 <code>each[T](s, yield)</code>）去重；目前 1 行/操作符尚可接受。</p>
+    </div>
+
+    <div class="item">
+      <h3><span class="label label-question">Question</span> range-over-nil 是否会在 Go 1.27 正式版改变？</h3>
+      <p><strong>Assumption:</strong> Go issue #68931 讨论「允许 nil 迭代器」，若采纳则 <code>for range nilSeq</code> 变 no-op，守卫可移除。</p>
+      <p><strong>Verify:</strong> Go 1.27 正式版发布后确认；守卫即便冗余也无害（保留即可）。</p>
+    </div>
+
+    <p class="footer">Generated by goal-workflow /note-it</p>
+  </div>
+</body>
+</html>
