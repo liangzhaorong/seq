@@ -1,0 +1,22 @@
+# /loop-it 循环状态文件（不入库）
+.loop-state.json
+
+# Go 构建产物 / 工具缓存
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+go.work.sum
+coverage.out
+coverage.html
+
+# 编辑器 / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo
