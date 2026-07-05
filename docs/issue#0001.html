@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Implementation Notes — Issue #0001</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #FAF9F6;
+      color: #1a1a1a;
+      padding: 2.5rem 2rem;
+      line-height: 1.7;
+    }
+    .container { max-width: 800px; margin: 0 auto; }
+    h1 { font-size: 1.375rem; font-weight: 700; margin-bottom: 0.25rem; }
+    .meta { color: #8B8680; font-size: 0.8125rem; margin-bottom: 2rem; }
+    h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-top: 2rem;
+      margin-bottom: 0.75rem;
+      padding-bottom: 0.375rem;
+      border-bottom: 1px solid #E8E4DE;
+      display: flex; align-items: center; gap: 0.5rem;
+    }
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+    }
+    .dot.design { background: #5B8A72; }
+    .dot.deviation { background: #D97757; }
+    .dot.tradeoff { background: #4A6FA5; }
+    .dot.question { background: #D4A843; }
+    .item {
+      background: #FFFFFF;
+      border: 1px solid #E8E4DE;
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 0.75rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+    }
+    .item h3 { font-size: 0.875rem; font-weight: 600; margin-bottom: 0.375rem; }
+    .item p { font-size: 0.8125rem; color: #4A4540; margin-bottom: 0.375rem; }
+    .label {
+      display: inline-block;
+      font-size: 0.6875rem;
+      font-weight: 500;
+      padding: 0.125rem 0.5rem;
+      border-radius: 4px;
+      margin-right: 0.375rem;
+    }
+    .label-design { background: #F5F8F6; color: #5B8A72; border: 1px solid #5B8A72; }
+    .label-deviation { background: #FFF5F0; color: #D97757; border: 1px solid #D97757; }
+    .label-tradeoff { background: #F0F4F8; color: #4A6FA5; border: 1px solid #4A6FA5; }
+    .label-question { background: #FDF8F0; color: #D4A843; border: 1px solid #D4A843; }
+    .none { color: #B0AAA4; font-style: italic; font-size: 0.8125rem; }
+    .footer {
+      text-align: center; margin-top: 2.5rem; color: #B0AAA4;
+      font-size: 0.6875rem;
+    }
+    code { background: #F0EEE9; padding: 0.05rem 0.3rem; border-radius: 3px; font-size: 0.8rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Implementation Notes</h1>
+    <p class="meta">Issue <a href="https://github.com/liangzhaorong/seq/issues/1">#1</a> &mdash; 项目骨架 + 包装类型 + 构造器 &mdash; 2026-07-05</p>
+
+    <h2><span class="dot design"></span> Design Decisions</h2>
+
+    <div class="item">
+      <h3><span class="label label-design">Decision</span> 互转原语 <code>Unbox</code>/<code>FromSeq</code> 归入 seq.go，与类型同处</h3>
+      <p><strong>Ambiguity:</strong> SPEC §2.4 把 <code>FromSeq</code> 列在 constructors.go，但 §3.2 又把它与 <code>Unbox</code> 作为「零成本互转」对一起定义。</p>
+      <p><strong>Choice:</strong> <code>Seq.Unbox</code> 与 <code>FromSeq</code> 放在 seq.go（类型定义旁）；constructors.go 只放值构造器 <code>Of/FromSlice/Empty/Range/Repeat/Generate/Cycle/FromMap</code>。</p>
+      <p><strong>Rationale:</strong> 互转原语是类型契约的一部分，与类型定义同文件便于阅读；值构造器是「产生数据」的独立关注点，分文件清晰。</p>
+    </div>
+
+    <div class="item">
+      <h3><span class="label label-design">Decision</span> 在 #1 即引入 <code>Seq2.Unbox</code> 与 <code>FromSeq2</code></h3>
+      <p><strong>Ambiguity:</strong> #1 验收列出的构造器是 <code>Of/FromSlice/FromSeq/Empty/Range/Repeat/Generate/Cycle/FromMap</code>，未列 <code>FromSeq2</code>；SPEC §3.2 也只为 <code>Seq</code> 定义了互转。</p>
+      <p><strong>Choice:</strong> 额外加入 <code>Seq2.Unbox()</code> 与 <code>FromSeq2()</code>（各一行零成本转换）。</p>
+      <p><strong>Rationale:</strong> <code>FromMap</code> 已产出 <code>Seq2</code>，没有互转原语则它无法喂给标准库 <code>maps.*</code>；对称补齐互转比把「类型引入」与「基础互转」拆到两个 PR（#1 与 #9）更连贯。#9 的 Seq2 操作可直接复用。</p>
+    </div>
+
+    <div class="item">
+      <h3><span class="label label-design">Decision</span> <code>Cycle</code> 空源在无限模式下首遍空即终止</h3>
+      <p><strong>Ambiguity:</strong> SPEC §5.6 称无限流须配短路终止器；但 <code>Cycle(Empty(), -1)</code> 源永远产不出元素，消费者的 <code>break</code> 永无机会触发 → 死循环。</p>
+      <p><strong>Choice:</strong> 无限分支中用 <code>yieldedAny</code> 追踪：若一整遍未产出任何元素，立即 <code>return</code>（产出空流）。</p>
+      <p><strong>Rationale:</strong> <code>Cycle</code> 一个被完全过滤掉的流是「退化但可达」的输入；与其 100% CPU 死循环，空源应当产出空流，保持短路保证。</p>
+    </div>
+
+    <div class="item">
+      <h3><span class="label label-design">Decision</span> <code>Number</code> 约束不含 complex</h3>
+      <p><strong>Ambiguity:</strong> 无（SPEC §3.3 明确「无 complex」）。</p>
+      <p><strong>Choice:</strong> <code>Number</code> = int/uint/float 各宽度并集，排除 complex64/128。</p>
+      <p><strong>Rationale:</strong> Sum/Product/Mean 对复数语义含糊，与 SPEC 一致，无歧义。</p>
+    </div>
+
+    <h2><span class="dot deviation"></span> Deviations</h2>
+
+    <div class="item">
+      <h3><span class="label label-deviation">Deviation</span> <code>.golangci.yml</code> 禁用 staticcheck</h3>
+      <p><strong>Spec:</strong> #1 验收要求「<code>golangci-lint run</code> 全部通过」；SPEC FR-14 隐含默认 lint 全集。</p>
+      <p><strong>Implemented:</strong> 新增 <code>.golangci.yml</code>（v2 schema），显式排除 staticcheck，启用 errcheck/govet/ineffassign/unused/misspell/revive/gocritic 等可用集合。</p>
+      <p><strong>Why:</strong> 捆绑的 staticcheck（honnef.co/go/tools v0.7.0）的 IR 构建（buildir/typedness/purity/nilness）在 Go 1.27 range-over-func 迭代器与范型方法上崩溃（<code>interface {} is nil, not *buildir.IR</code>），尚未适配 1.27。这是工具链问题，非代码问题；在 staticcheck 支持 1.27 后恢复（见 Open Questions，#16 CI 收口）。</p>
+    </div>
+
+    <div class="item">
+      <h3><span class="label label-deviation">Deviation</span> 用 go1.27rc1 自建 golangci-lint v2.12.2 取代系统 v1.64.8</h3>
+      <p><strong>Spec:</strong> 验收隐含使用环境自带的 golangci-lint。</p>
+      <p><strong>Implemented:</strong> <code>go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest</code>（用 go1.27rc1 构建），装到 <code>/go/bin</code>；系统 <code>/usr/local/bin</code> 的 v1.64.8（go1.25 构建）拒绝 lint <code>go 1.27</code> 模块。</p>
+      <p><strong>Why:</strong> Go 1.27 仍是 rc，无稳定版；任何用 ≤1.26 构建的 golangci-lint 都无法处理 <code>go 1.27</code> 模块。CI（#16）须复刻此安装方式。</p>
+    </div>
+
+    <h2><span class="dot tradeoff"></span> Tradeoffs</h2>
+
+    <div class="item">
+      <h3><span class="label label-tradeoff">Tradeoff</span> <code>Range</code> int 溢出：仅文档说明，不加守卫</h3>
+      <p><strong>Alternatives:</strong> (a) 每次迭代加溢出检查 <code>i &gt; math.MaxInt - step</code>；(b) 预计算长度再 <code>for range count</code>；(c) 仅 godoc 标注 fixed-width int 限制。</p>
+      <p><strong>Pros/Cons:</strong> (a) 严格保持半开区间不变量，但引入 <code>math</code> 依赖与每次迭代额外比较，收益仅限 near-MaxInt 边界；(b) 长度计算本身会溢出，治标不治本；(c) 零成本、诚实，符合标准库惯例（Go 无原生 Range，固定宽度算术溢出是固有性质）。</p>
+      <p><strong>Why chosen:</strong> 实测确认溢出仅在 stop 接近 MaxInt 且 step≥2 时发生（<code>Range(0,MaxInt,1)</code> 实际正确终止），属 review-it 判定的「不现实边界」；按惯例文档化，不为不可达情形过度工程。</p>
+    </div>
+
+    <div class="item">
+      <h3><span class="label label-tradeoff">Tradeoff</span> <code>Repeat</code>/<code>Generate</code> 负长钳制用 <code>max(0,n)</code></h3>
+      <p><strong>Alternatives:</strong> <code>if n &lt; 0 { n = 0 }</code> 三行 vs <code>n = max(0, n)</code> 一行。</p>
+      <p><strong>Why chosen:</strong> <code>max</code>（Go 1.21+ 内置）更简洁地道，且集中一处语义；go1.27 已稳定支持。</p>
+    </div>
+
+    <div class="item">
+      <h3><span class="label label-tradeoff">Tradeoff</span> <code>Of</code> 与 <code>FromSlice</code> 循环体近乎相同仍各自独立</h3>
+      <p><strong>Alternatives:</strong> <code>Of</code> 委托 <code>FromSlice(vs)</code> 复用循环体。</p>
+      <p><strong>Why chosen:</strong> 二者契约不同——<code>Of</code> 是字面量可变参数（每次新切片），<code>FromSlice</code> 不拷贝且文档警告调用者勿改切片；循环体两行，去重反而模糊契约边界。保持独立。</p>
+    </div>
+
+    <h2><span class="dot question"></span> Open Questions</h2>
+
+    <div class="item">
+      <h3><span class="label label-question">Question</span> staticcheck 何时恢复？</h3>
+      <p><strong>Assumption:</strong> honnef.co/go/tools 发布 Go 1.27 支持后，可在 <code>.golangci.yml</code> 重新启用 staticcheck。</p>
+      <p><strong>Verify:</strong> 在 #16（工程化/CI）收口前，确认 staticcheck 已适配 1.27；若已适配，移除 <code>.golangci.yml</code> 的排除并跑全量 lint。</p>
+    </div>
+
+    <div class="item">
+      <h3><span class="label label-question">Question</span> CI 如何安装 go1.27 版 golangci-lint？</h3>
+      <p><strong>Assumption:</strong> GitHub Actions 需用 go1.27 工具链 <code>go install</code> golangci-lint，而非 <code>golangci-lint-action</code> 默认的预编译二进制（后者可能仍用 ≤1.26 构建）。</p>
+      <p><strong>Verify:</strong> #16 编写 <code>.github/workflows/ci.yml</code> 时确认 lint 步骤用 go1.27 自建版本；可能需 <code>GOTOOLCHAIN=local</code> 与 rc1 的 setup-go。</p>
+    </div>
+
+    <div class="item">
+      <h3><span class="label label-question">Question</span> <code>Collect</code> 空流返回 <code>nil</code> 还是 <code>[]T{}</code>？</h3>
+      <p><strong>Assumption:</strong> SPEC §11.3 倾向 <code>nil</code>（减少分配），但标记「待 review 确认」。</p>
+      <p><strong>Verify:</strong> 在 #7（物化）实现 <code>Collect</code> 时定夺并锁定；本 #1 测试 helper <code>collect</code> 已用 nil 语义（<code>var out []T</code>）。</p>
+    </div>
+
+    <div class="item">
+      <h3><span class="label label-question">Question</span> <code>GOTOOLCHAIN=local</code> 是否需要写进 CI/文档？</h3>
+      <p><strong>Assumption:</strong> 本地设 <code>go env -w GOTOOLCHAIN=local</code> 防止 go 尝试下载尚不存在的稳定版 1.27。</p>
+      <p><strong>Verify:</strong> CI 环境是否同样需要；若 setup-go 直接提供 1.27rc1，可能不需要。在 #16 确认。</p>
+    </div>
+
+    <p class="footer">Generated by goal-workflow /note-it</p>
+  </div>
+</body>
+</html>

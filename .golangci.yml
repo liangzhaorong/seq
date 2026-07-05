@@ -1,0 +1,36 @@
+# golangci-lint configuration (v2 schema).
+#
+# staticcheck is excluded because the bundled staticcheck (honnef.co/go/tools)
+# IR builder does not yet support Go 1.27 range-over-func iterators and generic
+# methods and panics during analysis ("interface {} is nil, not *buildir.IR").
+# The remaining default linters (errcheck, govet, ineffassign, unused) plus a
+# curated quality set run cleanly on Go 1.27. Re-enable staticcheck once it
+# ships Go 1.27 support (tracked with CI hardening in issue #16).
+version: "2"
+
+run:
+  go: "1.27"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - unused
+    - misspell
+    - revive
+    - gocritic
+    - unconvert
+    - unparam
+    - durationcheck
+    - nilerr
+    - bodyclose
+    - copyloopvar
+    - intrange
+    - wastedassign
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
