@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>实现笔记 — Issue #0006</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #FAF9F6; color: #1a1a1a; padding: 2.5rem 2rem; line-height: 1.7;
+    }
+    .container { max-width: 800px; margin: 0 auto; }
+    h1 { font-size: 1.375rem; font-weight: 700; margin-bottom: 0.25rem; }
+    .meta { color: #8B8680; font-size: 0.8125rem; margin-bottom: 2rem; }
+    h2 {
+      font-size: 1rem; font-weight: 600; margin-top: 2rem; margin-bottom: 0.75rem;
+      padding-bottom: 0.375rem; border-bottom: 1px solid #E8E4DE;
+      display: flex; align-items: center; gap: 0.5rem;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    .dot.design { background: #5B8A72; }
+    .dot.deviation { background: #D97757; }
+    .dot.tradeoff { background: #4A6FA5; }
+    .dot.question { background: #D4A843; }
+    .item {
+      background: #FFFFFF; border: 1px solid #E8E4DE; border-radius: 8px;
+      padding: 1rem 1.25rem; margin-bottom: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+    }
+    .item h3 { font-size: 0.875rem; font-weight: 600; margin-bottom: 0.375rem; }
+    .item p { font-size: 0.8125rem; color: #4A4540; margin-bottom: 0.375rem; }
+    .item p:last-child { margin-bottom: 0; }
+    .label {
+      display: inline-block; font-size: 0.6875rem; font-weight: 500;
+      padding: 0.125rem 0.5rem; border-radius: 4px; margin-right: 0.375rem;
+    }
+    .label-design { background: #F5F8F6; color: #5B8A72; border: 1px solid #5B8A72; }
+    .label-deviation { background: #FFF5F0; color: #D97757; border: 1px solid #D97757; }
+    .label-tradeoff { background: #F0F4F8; color: #4A6FA5; border: 1px solid #4A6FA5; }
+    .label-question { background: #FDF8F0; color: #D4A843; border: 1px solid #D4A843; }
+    code { background: #F3F0EB; padding: 0.0625rem 0.3rem; border-radius: 3px; font-size: 0.75rem; }
+    .none { color: #B0AAA4; font-style: italic; font-size: 0.8125rem; }
+    .footer { text-align: center; margin-top: 2.5rem; color: #B0AAA4; font-size: 0.6875rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>实现笔记</h1>
+    <p class="meta">Issue <a href="https://github.com/liangzhaorong/seq/issues/6">#6</a> &mdash; 聚合与统计（终止操作） &mdash; 2026-07-06</p>
+
+    <h2><span class="dot design"></span> 设计决策</h2>
+
+    <div class="item">
+      <h3><span class="label label-design">决策</span> Reduce 用首元素作累加器初值（first 标志位）</h3>
+      <p><strong>模糊处：</strong> SPEC §4.3 给出 <code>Reduce(merge) (T, bool)</code> 签名，未规定累加器初值来源。</p>
+      <p><strong>选择：</strong> 以首个元素为 acc 初值，用 <code>first</code> 标志位区分「空流」与「首元素」。空流返回 <code>(zero, false)</code>；单元素返回 <code>(elem, true)</code>。</p>
+      <p><strong>理由：</strong> Reduce 语义是「元素间 merge」（同 Scala/lo 的 reduce），首元素自然作初值。若用类型零值作 seed 再 merge 首元素，会引入语义偏差（例如乘法归约、字符串拼接会多出一个零值/空串）。需要种子或异类型累加的场景由 <code>Fold[U](seed, f)</code> 覆盖。</p>
+    </div>
+
+    <div class="item">
+      <h3><span class="label label-design">决策</span> Min/Max 用 cmp.Compare（而非 &lt; / &gt;）</h3>
+      <p><strong>review 触发：</strong> 初版用 <code>v &lt; best</code> / <code>v &gt; best</code>；review 指出 SPEC §5.2 明确「Min/Max 用 cmp.Compare」。</p>
+      <p><strong>选择：</strong> 改为 <code>cmp.Compare(v, best) &lt; 0</code>（Min）/ <code>&gt; 0</code>（Max），并 <code>import "cmp"</code>。</p>
+      <p><strong>理由：</strong> 对齐 SPEC §5.2 字面；<code>cmp.Compare</code> 对 NaN 一致处理（视为最小，与标准库 <code>slices.Sort</code> 一致），而 <code>&lt;</code> 对 NaN 行为不确定（NaN 与任何值比较都 false，会跳过更新）。虽然本库典型用法不含 NaN，但用 cmp.Compare 让边界可预测且与 SPEC/标准库对齐。</p>
+    </div>
+
+    <div class="item">
+      <h3><span class="label label-design">决策</span> ReduceRight 缓冲整个流（O(n) 内存）</h3>
+      <p><strong>模糊处：</strong> SPEC 未规定 ReduceRight 的实现方式。</p>
+      <p><strong>选择：</strong> 物化整个流到 <code>[]T</code>，再从右向左 <code>merge(buf[i], acc)</code>。</p>
+      <p><strong>理由：</strong> range-over-func 迭代器单向（左→右），无法惰性从右归约；要看到末尾必须先消费到末尾。缓冲是唯一方案，godoc 已标注 O(n) 内存（SPEC §5.3 缓冲类操作惯例）。</p>
+    </div>
+
+    <h2><span class="dot deviation"></span> 偏离</h2>
+
+    <div class="item">
+      <h3><span class="label label-deviation">偏离</span> 聚合操作集中在 aggregate.go（Sum/Min/Max/Mean 不放 collect.go）</h3>
+      <p><strong>SPEC：</strong> §2.4 文件结构把 <code>Sum/Min/Max/Mean</code> 列入 collect.go，<code>Reduce/Fold/Count/...</code> 列入 aggregate.go。</p>
+      <p><strong>实现：</strong> issue #6 的全部聚合操作（含 Sum/Product/Min/Max/Mean）都放在 aggregate.go。</p>
+      <p><strong>原因：</strong> issue #6 验收条件把 Sum/Product/Min/Max/Mean 与 Reduce/Fold 归为同一「聚合与统计」主题。集中一个文件比按 SPEC 拆分到 collect.go 更内聚；collect.go 留给 issue #7 的 Collect/ToSlice/Join/String/ToMap/ToSet（物化操作）。SPEC §2.4 的文件归属是建议，issue 验收与内聚性优先。</p>
+    </div>
+
+    <div class="item">
+      <h3><span class="label label-deviation">偏离</span> 新增 ReduceRight（SPEC §4.3 表格未列）</h3>
+      <p><strong>SPEC：</strong> §4.3 方法表格只列 Reduce/Fold，未列 ReduceRight。</p>
+      <p><strong>实现：</strong> 实现了 ReduceRight（issue #6 验收条件明确要求）。</p>
+      <p><strong>原因：</strong> 以 issue 验收条件为权威。SPEC §4.3 表格遗漏 ReduceRight，建议后续补充（见 Open Questions）。</p>
+    </div>
+
+    <h2><span class="dot tradeoff"></span> 权衡</h2>
+
+    <div class="item">
+      <h3><span class="label label-tradeoff">权衡</span> Min/Max 直接实现，不复用 MinBy/MaxBy</h3>
+      <p><strong>备选 A（当前）：</strong> Min/Max 各自直接用 <code>cmp.Compare</code> 单趟扫描。</p>
+      <p><strong>备选 B：</strong> <code>Min = s.MinBy(func(a,b T) bool { return cmp.Compare(a,b) &lt; 0 })</code>，一行复用。</p>
+      <p><strong>胜出理由：</strong> 选 A。Min 是顶层（T Ordered），MinBy 是方法（T any + less），复用需构造 less 闭包。直接实现避免闭包间接调用，与 #3 中 Dedupe 内联（而非复用 DedupeBy）的热路径决策一致。MinBy/MaxBy 仍保留供「自定义 less / 非 Ordered 类型」场景。</p>
+    </div>
+
+    <div class="item">
+      <h3><span class="label label-tradeoff">权衡</span> Mean 内部 float64 累加，不复用 Sum</h3>
+      <p><strong>备选 A（当前）：</strong> Mean 内部 <code>sum := 0.0; sum += float64(v)</code> 逐元素累加。</p>
+      <p><strong>备选 B：</strong> <code>float64(Sum(s)) / float64(Count(s))</code> 复用 Sum。</p>
+      <p><strong>胜出理由：</strong> 选 A。Sum 返回 T（如 int），对超大整数流先求 int 和会溢出，再转 float64 已丢精度；直接 float64 累加避免中间 int 溢出，精度更优。代价是每个 int→float64 转换（可忽略）。</p>
+    </div>
+
+    <h2><span class="dot question"></span> 开放问题</h2>
+
+    <div class="item">
+      <h3><span class="label label-question">问题</span> SPEC §4.3 是否补列 ReduceRight</h3>
+      <p><strong>不确定点：</strong> issue #6 验收要求 ReduceRight，但 SPEC §4.3 方法表格未列。SPEC 与 issue 存在不一致。</p>
+      <p><strong>需确认：</strong> 是否在 SPEC §4.3 补列 <code>ReduceRight(merge func(a,b T) T) (T, bool)</code>（并标注「需缓冲」），使 SPEC 与实现一致？属文档维护，建议在 #15/#16 工程化阶段统一修订 SPEC。</p>
+    </div>
+
+    <div class="item">
+      <h3><span class="label label-question">问题</span> Mean 对超大整数的精度损失是否需更精确变体</h3>
+      <p><strong>不确定点：</strong> Mean 把每个 int 转 float64 累加，元素值接近 2^53 时 float64 无法精确表示，累加有精度损失（godoc 已注明）。</p>
+      <p><strong>需确认：</strong> 是否需要高精度 Mean 变体（如 Kahan 求和、或先求和再除的大数路径）？SPEC 未要求，典型场景（统计均值）当前精度足够。记录供未来性能/精度优化 issue 评估。</p>
+    </div>
+
+    <p class="footer">Generated by goal-workflow /note-it</p>
+  </div>
+</body>
+</html>
