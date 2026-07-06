@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>实现笔记 — Issue #0005</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #FAF9F6; color: #1a1a1a; padding: 2.5rem 2rem; line-height: 1.7;
+    }
+    .container { max-width: 800px; margin: 0 auto; }
+    h1 { font-size: 1.375rem; font-weight: 700; margin-bottom: 0.25rem; }
+    .meta { color: #8B8680; font-size: 0.8125rem; margin-bottom: 2rem; }
+    h2 {
+      font-size: 1rem; font-weight: 600; margin-top: 2rem; margin-bottom: 0.75rem;
+      padding-bottom: 0.375rem; border-bottom: 1px solid #E8E4DE;
+      display: flex; align-items: center; gap: 0.5rem;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    .dot.design { background: #5B8A72; }
+    .dot.deviation { background: #D97757; }
+    .dot.tradeoff { background: #4A6FA5; }
+    .dot.question { background: #D4A843; }
+    .item {
+      background: #FFFFFF; border: 1px solid #E8E4DE; border-radius: 8px;
+      padding: 1rem 1.25rem; margin-bottom: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+    }
+    .item h3 { font-size: 0.875rem; font-weight: 600; margin-bottom: 0.375rem; }
+    .item p { font-size: 0.8125rem; color: #4A4540; margin-bottom: 0.375rem; }
+    .item p:last-child { margin-bottom: 0; }
+    .label {
+      display: inline-block; font-size: 0.6875rem; font-weight: 500;
+      padding: 0.125rem 0.5rem; border-radius: 4px; margin-right: 0.375rem;
+    }
+    .label-design { background: #F5F8F6; color: #5B8A72; border: 1px solid #5B8A72; }
+    .label-deviation { background: #FFF5F0; color: #D97757; border: 1px solid #D97757; }
+    .label-tradeoff { background: #F0F4F8; color: #4A6FA5; border: 1px solid #4A6FA5; }
+    .label-question { background: #FDF8F0; color: #D4A843; border: 1px solid #D4A843; }
+    code { background: #F3F0EB; padding: 0.0625rem 0.3rem; border-radius: 3px; font-size: 0.75rem; }
+    .none { color: #B0AAA4; font-style: italic; font-size: 0.8125rem; }
+    .footer { text-align: center; margin-top: 2.5rem; color: #B0AAA4; font-size: 0.6875rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>实现笔记</h1>
+    <p class="meta">Issue <a href="https://github.com/liangzhaorong/seq/issues/5">#5</a> &mdash; 查找与包含（终止操作） &mdash; 2026-07-06</p>
+
+    <h2><span class="dot design"></span> 设计决策</h2>
+
+    <div class="item">
+      <h3><span class="label label-design">决策</span> ContainsBy/None 复用 Any；All 直接实现</h3>
+      <p><strong>模糊处：</strong> SPEC §4.3 并列列出 Any/All/None/ContainsBy，未规定它们之间的实现关系。</p>
+      <p><strong>选择：</strong> Any 直接实现（核心）；<code>ContainsBy = s.Any(pred)</code>；<code>None = !s.Any(pred)</code>；All 直接实现（不复用 Any）。</p>
+      <p><strong>理由：</strong> ContainsBy 语义等同 Any（存在即真），None 是 Any 的逻辑否定，复用各一行即可，DRY 且 godoc 标注等价关系、测试（TestContainsByNoneEquivalent）锁定。All 若复用需写成 <code>!Any(func(v T) bool { return !pred(v) })</code>，引入否定闭包且双重否定损害可读性，直接实现（遇首个不满足即 false）更清晰。这些都是<strong>终止操作</strong>（非中间热路径），复用的单层方法调用开销可忽略，与 #3 中 Dedupe 内联（中间操作热路径）的取舍不同。</p>
+    </div>
+
+    <div class="item">
+      <h3><span class="label label-design">决策</span> Find（按值，顶层）与 FindBy（按谓词，方法）的命名区分</h3>
+      <p><strong>模糊处：</strong> SPEC §4.3 有 <code>FindBy</code>（方法），§4.4 有 <code>Find</code>（顶层），两者都叫「find」。</p>
+      <p><strong>选择：</strong> <code>Find[T comparable](s, v, def) T</code> 按<strong>值</strong>查找（顶层，D4）；<code>FindBy(pred, def) T</code> 按<strong>谓词</strong>查找（方法，T any）。</p>
+      <p><strong>理由：</strong> 遵循 D4——Find 需 <code>v == x</code> 比较（T comparable）故必须顶层；FindBy 用谓词不约束 T 故可为方法。<code>By</code> 后缀统一表示「按谓词/键」，与 ContainsBy/DedupeBy/UniqBy 等命名一致，读者可一眼区分「按值」与「按谓词」两个族。</p>
+    </div>
+
+    <h2><span class="dot deviation"></span> 偏离</h2>
+
+    <div class="item">
+      <h3><span class="label label-deviation">偏离</span> 无 — 严格遵循 SPEC</h3>
+      <p><strong>SPEC：</strong> §4.3（方法 FindBy/ContainsBy/Any/All/None）、§4.4（顶层 Contains/IndexOf/Find）、§5.6（空流 Any→false、All→true）、D4（comparable 用顶层）。</p>
+      <p><strong>实现：</strong> 8 个符号的签名、分类（方法 vs 顶层）、空流语义、短路行为、命名拼写全部与 SPEC 一致，无偏离。</p>
+    </div>
+
+    <h2><span class="dot tradeoff"></span> 权衡</h2>
+
+    <div class="item">
+      <h3><span class="label label-tradeoff">权衡</span> Contains/IndexOf/Find 不抽取共享 helper</h3>
+      <p><strong>备选 A（当前）：</strong> 三个顶层函数各自直接实现 <code>range + ==v</code> 比较，各自短路。</p>
+      <p><strong>备选 B：</strong> 抽取内部 <code>indexOf(s, v) (int, bool)</code>，让 Contains 复用 <code>indexOf(...) != -1</code>、Find 复用按索引取值。</p>
+      <p><strong>胜出理由：</strong> 选 A。三者返回类型不同（bool / int / T），抽 helper 返回元组再各自解包，引入分支与额外复杂度；而每个函数体仅 5-8 行、逻辑直观。在单包小库语境下，B 属过度抽象，A 的轻微重复换取的是每个入口的独立可读性。</p>
+    </div>
+
+    <h2><span class="dot question"></span> 开放问题</h2>
+
+    <div class="item">
+      <h3><span class="label label-question">问题</span> FindBy 的 def 参数无法区分「找到的值恰为 def」与「未找到」</h3>
+      <p><strong>不确定点：</strong> <code>FindBy(pred, def) T</code> 在未找到时返回 def（SPEC §4.3 规定）。但若找到的元素本身恰好等于 def，调用方无法区分「找到了 def」与「没找到」。</p>
+      <p><strong>需确认：</strong> 是否需要 <code>(T, bool)</code> 形式的变体（如 FindByOpt），让调用方能明确区分「命中」与「未命中」？SPEC 当前只定义 def 形式。多数场景 def 足够（如用 -1/nil 哨兵），但值域不含哨兵的场景有歧义。属可选增强，需用户确认是否纳入。</p>
+    </div>
+
+    <div class="item">
+      <h3><span class="label label-question">问题</span> Any/All/None 命名是否在 README 对照表标注 lo 等价</h3>
+      <p><strong>不确定点：</strong> 本库用 Scala 风格命名 Any/All/None（设计决策 D3）；lo 对应为 Some/Every/None。熟悉 lo 的用户可能找不到 Some/Every。</p>
+      <p><strong>需确认：</strong> README 的「与 lo 对照表」（SPEC §2.4 / #16 工程化）是否标注 Any=lo.Some、All=lo.Every、ContainsBy≈lo.ContainsKey 等映射？属文档范围，本 issue 不涉及，记录供 #15/#16 跟进。</p>
+    </div>
+
+    <p class="footer">Generated by goal-workflow /note-it</p>
+  </div>
+</body>
+</html>
