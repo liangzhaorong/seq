@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>实现笔记 — Issue #0003</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #FAF9F6;
+      color: #1a1a1a;
+      padding: 2.5rem 2rem;
+      line-height: 1.7;
+    }
+    .container { max-width: 800px; margin: 0 auto; }
+    h1 { font-size: 1.375rem; font-weight: 700; margin-bottom: 0.25rem; }
+    .meta { color: #8B8680; font-size: 0.8125rem; margin-bottom: 2rem; }
+    h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-top: 2rem;
+      margin-bottom: 0.75rem;
+      padding-bottom: 0.375rem;
+      border-bottom: 1px solid #E8E4DE;
+      display: flex; align-items: center; gap: 0.5rem;
+    }
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+    }
+    .dot.design { background: #5B8A72; }
+    .dot.deviation { background: #D97757; }
+    .dot.tradeoff { background: #4A6FA5; }
+    .dot.question { background: #D4A843; }
+    .item {
+      background: #FFFFFF;
+      border: 1px solid #E8E4DE;
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 0.75rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+    }
+    .item h3 { font-size: 0.875rem; font-weight: 600; margin-bottom: 0.375rem; }
+    .item p { font-size: 0.8125rem; color: #4A4540; margin-bottom: 0.375rem; }
+    .item p:last-child { margin-bottom: 0; }
+    .label {
+      display: inline-block;
+      font-size: 0.6875rem;
+      font-weight: 500;
+      padding: 0.125rem 0.5rem;
+      border-radius: 4px;
+      margin-right: 0.375rem;
+    }
+    .label-design { background: #F5F8F6; color: #5B8A72; border: 1px solid #5B8A72; }
+    .label-deviation { background: #FFF5F0; color: #D97757; border: 1px solid #D97757; }
+    .label-tradeoff { background: #F0F4F8; color: #4A6FA5; border: 1px solid #4A6FA5; }
+    .label-question { background: #FDF8F0; color: #D4A843; border: 1px solid #D4A843; }
+    code { background: #F3F0EB; padding: 0.0625rem 0.3rem; border-radius: 3px; font-size: 0.75rem; }
+    .none { color: #B0AAA4; font-style: italic; font-size: 0.8125rem; }
+    .footer {
+      text-align: center; margin-top: 2.5rem; color: #B0AAA4;
+      font-size: 0.6875rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>实现笔记</h1>
+    <p class="meta">Issue <a href="https://github.com/liangzhaorong/seq/issues/3">#3</a> &mdash; 过滤与压缩（中间操作） &mdash; 2026-07-06</p>
+
+    <h2><span class="dot design"></span> 设计决策</h2>
+
+    <div class="item">
+      <h3><span class="label label-design">决策</span> Dedupe 采用内联实现，而非复用 DedupeBy</h3>
+      <p><strong>模糊处：</strong> SPEC §4.2 注脚只规定 <code>Dedupe</code> 因 D4 退化为顶层泛型函数，未规定它内部是否应复用 <code>DedupeBy</code>。</p>
+      <p><strong>选择：</strong> 初版写成 <code>return s.DedupeBy(func(v T) T { return v })</code>（复用），review 后改为在内联闭包中直接比较 <code>v != prev</code>。</p>
+      <p><strong>理由：</strong> 复用会在热路径上引入一个恒等闭包（<code>func(v T) T { return v }</code>），该闭包被返回的 Seq 捕获、逃逸到堆，且每个元素多一次间接调用——与 SPEC §8.2「保持中间操作闭包短小、利于编译器内联」的性能哲学相悖。内联后零额外开销，且与同文件 <code>FilterNot</code>/<code>Compact</code> 刻意内联的取法一致。代价是与 <code>DedupeBy</code> 重复约 10 行 first+prev 逻辑（见 Tradeoffs）。</p>
+    </div>
+
+    <div class="item">
+      <h3><span class="label label-design">决策</span> FilterNot 直接实现，不复用 Filter</h3>
+      <p><strong>模糊处：</strong> SPEC §4.2 只列出 <code>FilterNot(pred func(T) bool) Seq[T]</code> 的签名，未规定实现方式。</p>
+      <p><strong>选择：</strong> 直接在新闭包中写 <code>!pred(v)</code>，而非 <code>s.Filter(func(v T) bool { return !pred(v) })</code>。</p>
+      <p><strong>理由：</strong> 直接实现省去每次迭代额外一层 <code>pred</code> 包装闭包，与 <code>Filter</code> 结构对称、可读性更好。测试中用「等价于取反 Filter」子测试锁定两者语义一致。</p>
+    </div>
+
+    <div class="item">
+      <h3><span class="label label-design">决策</span> Compact 用 <code>var zero T</code> 判零值</h3>
+      <p><strong>模糊处：</strong> SPEC §1.3 D6 以表达式 <code>v == *new(T)</code> 描述 Compact 语义。</p>
+      <p><strong>选择：</strong> 实现用 <code>var zero T; ... if v != zero</code>，godoc 同时引用 <code>v == *new(T)</code> 以桥接 SPEC 文字。</p>
+      <p><strong>理由：</strong> <code>var zero T</code> 与 <code>*new(T)</code> 对所有类型产生完全相同的零值，但前者是更地道的 Go 写法，避免 <code>new</code> 的取址/解址。这是等价表达，非语义偏离。</p>
+    </div>
+
+    <h2><span class="dot deviation"></span> 偏离</h2>
+
+    <div class="item">
+      <h3><span class="label label-deviation">偏离</span> 无实质性偏离</h3>
+      <p><strong>SPEC：</strong> §4.2（Filter/FilterNot/Dedupe/DedupeBy）、§4.4（Compact）、D4（约束 T 用顶层函数）、D6（Compact 去零值）、§5.1（惰性+提前终止）、§5.5（nil→空流）。</p>
+      <p><strong>实现：</strong> 全部严格遵循。五个公开符号的签名、分类（方法 vs 顶层函数）、命名拼写均与 SPEC 表格一致；Compact 零值表达式仅是等价改写（见上方设计决策）。</p>
+      <p><strong>原因：</strong> SPEC 在本 issue 范围内足够明确，无需偏离。</p>
+    </div>
+
+    <h2><span class="dot tradeoff"></span> 权衡</h2>
+
+    <div class="item">
+      <h3><span class="label label-tradeoff">权衡</span> Dedupe：内联 vs 复用 DedupeBy</h3>
+      <p><strong>备选 A（复用）：</strong> <code>s.DedupeBy(identity)</code>。优点：DRY，去重逻辑只在 DedupeBy 一处。缺点：恒等闭包逃逸堆 + 每元素间接调用，热路径有可测开销。</p>
+      <p><strong>备选 B（内联，已选）：</strong> Dedupe 体内手写 first+prev 比较。优点：零额外开销、与 FilterNot/Compact 一致、契合 §8.2。缺点：与 DedupeBy 重复约 10 行逻辑，未来去重逻辑变更需同步两处。</p>
+      <p><strong>胜出理由：</strong> 这是一个明确追求性能的惰性迭代器库（SPEC §8 反复强调零中间切片、闭包内联），且 Dedupe 是高频相邻去重入口；性能/一致性收益压过 DRY 收益。两处逻辑相同且有共享的测试范式（TestDedupe / TestDedupeBy），重复风险可控。</p>
+    </div>
+
+    <div class="item">
+      <h3><span class="label label-tradeoff">权衡</span> DedupeBy：first+prev 双状态 vs *K 单指针</h3>
+      <p><strong>备选 A（first+prev，已选）：</strong> <code>first bool</code> + <code>prev K</code>。</p>
+      <p><strong>备选 B：</strong> <code>prevp *K</code>（初始 nil，<code>prevp == nil || *prevp != k</code>）合并为单状态。优点：少一个状态变量。缺点：引入指针解引用，且 <code>first</code> 并非冗余——若去掉它仅用 <code>var prev K</code>，当首元素键恰为 K 的零值时会误判为与初值重复而丢弃。review 据此拒绝该简化。</p>
+      <p><strong>胜出理由：</strong> <code>first</code> 是正确性必需（防止零值键误丢），当前写法清晰、无运行时代价，指针化未必更可读。</p>
+    </div>
+
+    <h2><span class="dot question"></span> 开放问题</h2>
+
+    <div class="item">
+      <h3><span class="label label-question">问题</span> 既有 #1/#2 的英文 godoc 是否统一为中文</h3>
+      <p><strong>不确定点：</strong> 用户全局 CLAUDE.md 规定「代码注释必须使用中文」。本 issue 新增的 <code>filter.go</code>/<code>filter_test.go</code> 已全用中文 godoc；但既有 <code>transform.go</code>、<code>constructors.go</code>、<code>seq.go</code>（#1/#2）历史地用英文 godoc，与本规则不一致，导致同属「中间操作」的 Map（英文）与 Filter（中文）godoc 语言分叉。</p>
+      <p><strong>需确认：</strong> 是否在某个 issue（如 #16 工程化交付，或单独的文档统一 issue）把既有英文 godoc 统一译为中文？本 issue 未擅自改动既有文件以保持 PR 焦点。</p>
+    </div>
+
+    <div class="item">
+      <h3><span class="label label-question">问题</span> Dedupe（相邻去重）与 Uniq（全流去重）的命名区分是否需在 README 强调</h3>
+      <p><strong>不确定点：</strong> 本库 <code>Dedupe</code> 语义是「去相邻重复」（纯惰性，只记前一个元素），而 SPEC §4.4 的 <code>Uniq</code>（属 issue #10）是「全流去重」（需缓冲整流）。注意 lo 库的 <code>lo.Dedupe</code> 实为全流去重——与本库命名语义相反，可能误导熟悉 lo 的用户。</p>
+      <p><strong>需确认：</strong> 是否在 README/对照表中明确标注 <code>Dedupe</code>（相邻，O(1) 内存）vs <code>Uniq</code>（全流，O(n) 内存）的语义差异，避免与 lo 混淆。</p>
+    </div>
+
+    <p class="footer">Generated by goal-workflow /note-it</p>
+  </div>
+</body>
+</html>
